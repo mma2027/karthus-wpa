@@ -45,6 +45,10 @@ source .venv/bin/activate
 python main.py collect --seed "SqfeWalk#NA1"
 python main.py collect --seed "SqfeWalk#NA1" --max-players 50
 
+# Verbose mode: print each player and match being fetched
+python main.py collect --seed "SqfeWalk#NA1" --max-players 50 --verbose
+python main.py collect --seed "SqfeWalk#NA1" --max-players 50 -v
+
 # Collect games — seed from NA master/GM/challenger ladder
 python main.py collect
 
@@ -58,6 +62,14 @@ python main.py players --tier CHALLENGER
 # Show all Karthus games stored for a player
 python main.py games "SqfeWalk#NA1"
 ```
+
+### collect flags
+
+| Flag | Description |
+|---|---|
+| `--seed NAME#TAG` | Start BFS from a specific player |
+| `--max-players N` | Stop after N players (useful for testing) |
+| `--verbose` / `-v` | Print each player name, rank, and match ID as they are fetched |
 
 ---
 

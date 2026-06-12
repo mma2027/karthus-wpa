@@ -387,6 +387,7 @@ async def _process_player(
     queue: deque,
     visited: set,
     all_match_cache: dict,  # match_id → metadata (participants list)
+    verbose: bool = False,
 ) -> None:
     """Fetch and store all Karthus games for one player, then expand queue."""
     is_seed = puuid == seed_puuid
@@ -414,6 +415,18 @@ async def _process_player(
     except RiotAPIError:
         pass  # non-fatal; player row already upserted from match data
 
+    if verbose:
+        player_row = db.get_player(puuid)
+        if player_row and player_row["game_name"]:
+            name_str = f"[bold]{player_row['game_name']}#{player_row['tag_line']}[/bold]"
+            rank_str = ""
+            if player_row["tier"]:
+                rank_str = f"  [dim]{player_row['tier']} {player_row['division'] or ''} {player_row['lp'] or 0} LP[/dim]"
+        else:
+            name_str = f"[dim]{puuid[:16]}…[/dim]"
+            rank_str = ""
+        console.print(f"[cyan]→[/cyan] {name_str}{rank_str}")
+
     try:
         # 2. For seed player: fetch all recent games (to widen BFS net)
         #    For everyone else: only Karthus games
@@ -432,11 +445,20 @@ async def _process_player(
     new_ids = [mid for mid in karthus_ids if not db.match_exists(mid)]
     for mid in new_ids:
         try:
+            if verbose:
+                console.print(f"  [dim]fetching {mid}…[/dim]")
             match_data    = await client.get_match(mid)
             timeline_data = await client.get_match_timeline(mid)
             stored = _store_game(mid, match_data, timeline_data)
             if stored:
                 progress.advance(games_task)
+                if verbose:
+                    info = match_data.get("info", {})
+                    kp   = _find_karthus_participant(info)
+                    role = _normalize_role(kp) if kp else "?"
+                    patch = _parse_patch(info.get("gameVersion", "0.0"))
+                    result = "[green]WIN[/green]" if kp and kp.get("win") else "[red]LOSS[/red]"
+                    console.print(f"  [green]✓[/green] stored  {result}  {role}  patch {patch}")
             # Cache participant list for BFS expansion
             all_match_cache[mid] = match_data.get("metadata", {}).get("participants", [])
             # Upsert names of all players in this game
@@ -471,6 +493,7 @@ async def run_collection(
     max_players: Optional[int] = None,
     api_key: Optional[str] = None,
     platform: str = "na1",
+    verbose: bool = False,
 ) -> None:
     """
     Main entry point for the collection pipeline.
@@ -573,6 +596,7 @@ async def run_collection(
                     client, puuid, seed_puuid, region,
                     progress, games_task, players_task,
                     queue, visited, all_match_cache,
+                    verbose=verbose,
                 )
 
     stats = db.get_collection_stats()

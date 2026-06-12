@@ -460,6 +460,13 @@ def get_events_for_match(
         ).fetchall()
 
 
+def get_player(puuid: str, db_path: Path = DB_PATH) -> Optional[sqlite3.Row]:
+    with get_connection(db_path) as conn:
+        return conn.execute(
+            "SELECT * FROM players WHERE puuid = ?", (puuid,)
+        ).fetchone()
+
+
 def find_player_by_name(
     game_name: str, tag_line: str, db_path: Path = DB_PATH
 ) -> Optional[sqlite3.Row]:

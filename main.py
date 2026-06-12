@@ -70,6 +70,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             max_players=max_players,
             api_key=api_key,
             platform=platform,
+            verbose=args.verbose,
         )
     )
 
@@ -217,6 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect = sub.add_parser("collect", help="Collect Karthus games from the Riot API")
     p_collect.add_argument("--seed",        metavar="NAME#TAG", help="Seed player Riot ID (e.g. SqfeWalk#NA1)")
     p_collect.add_argument("--max-players", metavar="N", type=int, help="Stop after N players (for testing)")
+    p_collect.add_argument("--verbose", "-v", action="store_true", help="Print each player and match being fetched")
 
     # stats
     sub.add_parser("stats", help="Show database collection statistics")
