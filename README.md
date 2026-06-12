@@ -16,7 +16,7 @@ Inspired by [Coachless.gg](https://coachless.gg). Supports all five Karthus role
 ## Installation
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/karthus-wpa
+git clone git@github.com:mma2027/karthus-wpa.git
 cd karthus-wpa
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
