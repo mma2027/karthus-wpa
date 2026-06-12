@@ -1,0 +1,35 @@
+# Environment — never commit API keys
+.env
+
+# Database — can be large and is machine-local
+*.db
+*.db-wal
+*.db-shm
+
+# Trained models — large binary files
+models/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
