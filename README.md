@@ -18,6 +18,8 @@ Inspired by [Coachless.gg](https://coachless.gg). Supports all five Karthus role
 ```bash
 git clone https://github.com/YOUR_USERNAME/karthus-wpa
 cd karthus-wpa
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
 ```
@@ -30,6 +32,11 @@ RIOT_PLATFORM=na1
 ```
 
 ---
+
+Each session, activate the environment first:
+```bash
+source .venv/bin/activate
+```
 
 ## Usage
 
