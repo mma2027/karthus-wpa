@@ -71,6 +71,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             api_key=api_key,
             platform=platform,
             verbose=args.verbose,
+            patch_window=args.patch_window,
         )
     )
 
@@ -203,6 +204,24 @@ def cmd_games(args: argparse.Namespace) -> None:
     console.print(t)
 
 
+def cmd_reset(_args: argparse.Namespace) -> None:
+    """Wipe the database — deletes all collected data and recreates empty schema."""
+    console.print(
+        "[bold red]WARNING:[/bold red] This will permanently delete all collected games, "
+        "players, timelines, and events."
+    )
+    confirm = input("Type 'yes' to confirm: ").strip().lower()
+    if confirm != "yes":
+        console.print("[yellow]Aborted.[/yellow]")
+        return
+
+    import db as _db
+    if _db.DB_PATH.exists():
+        _db.DB_PATH.unlink()
+    _db.init_db()
+    console.print("[bold green]Database wiped and schema recreated.[/bold green]")
+
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -216,8 +235,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # collect
     p_collect = sub.add_parser("collect", help="Collect Karthus games from the Riot API")
-    p_collect.add_argument("--seed",        metavar="NAME#TAG", help="Seed player Riot ID (e.g. SqfeWalk#NA1)")
-    p_collect.add_argument("--max-players", metavar="N", type=int, help="Stop after N players (for testing)")
+    p_collect.add_argument("--seed",         metavar="NAME#TAG", help="Seed player Riot ID (e.g. SqfeWalk#NA1)")
+    p_collect.add_argument("--max-players",  metavar="N", type=int, help="Stop after N players (for testing)")
+    p_collect.add_argument("--patch-window", metavar="N", type=int, default=5, help="Only store games from the N most recent patches (default: 5)")
     p_collect.add_argument("--verbose", "-v", action="store_true", help="Print each player and match being fetched")
 
     # stats
@@ -230,6 +250,9 @@ def build_parser() -> argparse.ArgumentParser:
     # games
     p_games = sub.add_parser("games", help="Show stored Karthus games for a player")
     p_games.add_argument("name", metavar="NAME#TAG", help="Player Riot ID")
+
+    # reset
+    sub.add_parser("reset", help="Wipe the database and start fresh (asks for confirmation)")
 
     return parser
 
@@ -248,6 +271,8 @@ def main() -> None:
         cmd_players(args)
     elif args.command == "games":
         cmd_games(args)
+    elif args.command == "reset":
+        cmd_reset(args)
     else:
         # No subcommand: show help + quick stats
         console.print(Panel(
@@ -256,7 +281,8 @@ def main() -> None:
             "  [green]collect --seed NAME#TAG[/green]  BFS from one player\n"
             "  [green]stats[/green]                Database overview\n"
             "  [green]players[/green]              List collected players\n"
-            "  [green]games NAME#TAG[/green]        Show games for a player\n\n"
+            "  [green]games NAME#TAG[/green]        Show games for a player\n"
+            "  [green]reset[/green]                Wipe database and start fresh\n\n"
             "Run [bold]python main.py --help[/bold] for full usage.",
             title="[bold]Karthus WPA[/bold]",
             border_style="cyan",

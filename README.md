@@ -61,6 +61,9 @@ python main.py players --tier CHALLENGER
 
 # Show all Karthus games stored for a player
 python main.py games "SqfeWalk#NA1"
+
+# Wipe the database and start fresh (asks for confirmation)
+python main.py reset
 ```
 
 ### collect flags
@@ -69,7 +72,8 @@ python main.py games "SqfeWalk#NA1"
 |---|---|
 | `--seed NAME#TAG` | Start BFS from a specific player |
 | `--max-players N` | Stop after N players (useful for testing) |
-| `--verbose` / `-v` | Print each player name, rank, and match ID as they are fetched |
+| `--patch-window N` | Only store games from the N most recent patches (default: 5). Patch list fetched automatically from Data Dragon. |
+| `--verbose` / `-v` | Print each player name, rank, and match as they are fetched |
 
 ---
 

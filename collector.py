@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+import time as _time
 from collections import deque
 from typing import Optional
 
@@ -50,6 +50,30 @@ def _parse_patch(game_version: str) -> str:
     if len(parts) >= 2:
         return f"{parts[0]}.{parts[1]}"
     return game_version
+
+
+async def _fetch_valid_patches(session: aiohttp.ClientSession, window: int) -> set[str]:
+    """
+    Fetch the most recent `window` patch strings from Data Dragon.
+    Returns a set like {'16.12', '16.11', '16.10', '16.9', '16.8'}.
+    Returns an empty set on failure (caller treats empty = no filter).
+    """
+    try:
+        async with session.get(
+            "https://ddragon.leagueoflegends.com/api/versions.json",
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                versions: list = await resp.json()
+                patches: set[str] = set()
+                for v in versions[:window]:
+                    parts = v.split(".")
+                    if len(parts) >= 2:
+                        patches.add(f"{parts[0]}.{parts[1]}")
+                return patches
+    except Exception:
+        pass
+    return set()
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +412,8 @@ async def _process_player(
     visited: set,
     all_match_cache: dict,  # match_id → metadata (participants list)
     verbose: bool = False,
+    valid_patches: Optional[set] = None,  # None = no patch filter
+    start_time: Optional[int] = None,     # epoch seconds cutoff for match IDs
 ) -> None:
     """Fetch and store all Karthus games for one player, then expand queue."""
     is_seed = puuid == seed_puuid
@@ -431,11 +457,11 @@ async def _process_player(
         # 2. For seed player: fetch all recent games (to widen BFS net)
         #    For everyone else: only Karthus games
         if is_seed:
-            all_ids = await client.get_match_ids(puuid, champion=None, count=50)
+            all_ids = await client.get_match_ids(puuid, champion=None, count=50, start_time=start_time)
         else:
             all_ids = []
 
-        karthus_ids = await client.get_match_ids(puuid, champion=KARTHUS_ID, count=100)
+        karthus_ids = await client.get_match_ids(puuid, champion=KARTHUS_ID, count=100, start_time=start_time)
 
     except RiotAPIError:
         db.mark_scanned(puuid)
@@ -443,26 +469,32 @@ async def _process_player(
 
     # 3. Fetch + store each new Karthus game
     new_ids = [mid for mid in karthus_ids if not db.match_exists(mid)]
-    for mid in new_ids:
+    for i, mid in enumerate(new_ids, 1):
         try:
+            match_data = await client.get_match(mid)
+            # Always cache participants for BFS, regardless of patch
+            all_match_cache[mid] = match_data.get("metadata", {}).get("participants", [])
+            _upsert_players_from_match(match_data, region)
+
+            # Check patch before fetching timeline (saves an API call if out of window)
+            info  = match_data.get("info", {})
+            patch = _parse_patch(info.get("gameVersion", "0.0"))
+            if valid_patches and patch not in valid_patches:
+                if verbose:
+                    console.print(f"  [dim]skip {i}/{len(new_ids)}  patch {patch} outside window[/dim]")
+                continue
+
             if verbose:
-                console.print(f"  [dim]fetching {mid}…[/dim]")
-            match_data    = await client.get_match(mid)
+                console.print(f"  [dim]fetching game {i}/{len(new_ids)}…[/dim]")
             timeline_data = await client.get_match_timeline(mid)
             stored = _store_game(mid, match_data, timeline_data)
             if stored:
                 progress.advance(games_task)
                 if verbose:
-                    info = match_data.get("info", {})
-                    kp   = _find_karthus_participant(info)
-                    role = _normalize_role(kp) if kp else "?"
-                    patch = _parse_patch(info.get("gameVersion", "0.0"))
+                    kp     = _find_karthus_participant(info)
+                    role   = _normalize_role(kp) if kp else "?"
                     result = "[green]WIN[/green]" if kp and kp.get("win") else "[red]LOSS[/red]"
-                    console.print(f"  [green]✓[/green] stored  {result}  {role}  patch {patch}")
-            # Cache participant list for BFS expansion
-            all_match_cache[mid] = match_data.get("metadata", {}).get("participants", [])
-            # Upsert names of all players in this game
-            _upsert_players_from_match(match_data, region)
+                    console.print(f"  [green]✓[/green] {i}/{len(new_ids)}  {result}  {role}  patch {patch}")
         except RiotAPIError:
             continue
 
@@ -494,13 +526,15 @@ async def run_collection(
     api_key: Optional[str] = None,
     platform: str = "na1",
     verbose: bool = False,
+    patch_window: int = 5,
 ) -> None:
     """
     Main entry point for the collection pipeline.
 
-    seed        : "GameName#TAG" to start BFS from one player
-                  None  → seed from NA master/GM/challenger ladder
-    max_players : stop after processing this many unique players (testing)
+    seed         : "GameName#TAG" to start BFS from one player
+                   None  → seed from NA master/GM/challenger ladder
+    max_players  : stop after processing this many unique players (testing)
+    patch_window : only store games from the N most recent patches (default 5)
     """
     db.init_db()
 
@@ -511,6 +545,20 @@ async def run_collection(
 
     async with make_session() as session:
         client = RiotClient(api_key=api_key, platform=platform, session=session)
+
+        # ── Patch window ───────────────────────────────────────────────
+        # Fetch the N most recent patch strings from Data Dragon.
+        # start_time is an approximate epoch-seconds cutoff (14 days per patch)
+        # used to pre-filter match IDs on the API side before the exact patch check.
+        valid_patches = await _fetch_valid_patches(session, patch_window)
+        start_time: Optional[int] = int(_time.time()) - (patch_window * 14 * 24 * 3600)
+        if valid_patches:
+            console.print(
+                f"[dim]Patch window ({patch_window}): {', '.join(sorted(valid_patches, reverse=True))}[/dim]"
+            )
+        else:
+            console.print("[yellow]Could not fetch patch list — collecting all patches.[/yellow]")
+            start_time = None
 
         # ── Determine seed PUUIDs ──────────────────────────────────────
         seed_puuid: str = ""
@@ -610,6 +658,8 @@ async def run_collection(
                     progress, games_task, players_task,
                     queue, visited, all_match_cache,
                     verbose=verbose,
+                    valid_patches=valid_patches if valid_patches else None,
+                    start_time=start_time,
                 )
 
     stats = db.get_collection_stats()

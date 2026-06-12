@@ -208,10 +208,12 @@ class RiotClient:
         champion: Optional[int] = None,
         count: int = 100,
         queue: int = 420,
+        start_time: Optional[int] = None,  # epoch seconds — filters to games after this time
     ) -> list[str]:
         """
         Fetch up to `count` ranked solo/duo match IDs for `puuid`.
         Pass champion=30 to filter for Karthus games only.
+        Pass start_time (epoch seconds) to skip games before a cutoff date.
         Paginates automatically until `count` is satisfied or no more pages.
         """
         url = (
@@ -226,6 +228,8 @@ class RiotClient:
             params: dict = {"queue": queue, "start": start, "count": page_size}
             if champion is not None:
                 params["champion"] = champion
+            if start_time is not None:
+                params["startTime"] = start_time
             try:
                 batch: list = await self._get(url, params)
             except RiotAPIError:
