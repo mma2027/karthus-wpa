@@ -490,6 +490,11 @@ async def _process_player(
             stored = _store_game(mid, match_data, timeline_data)
             if stored:
                 progress.advance(games_task)
+                count = progress.tasks[games_task].completed
+                progress.update(
+                    games_task,
+                    description=f"[green]Karthus games stored: {int(count)}[/green]",
+                )
                 if verbose:
                     kp     = _find_karthus_participant(info)
                     role   = _normalize_role(kp) if kp else "?"
