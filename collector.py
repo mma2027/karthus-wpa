@@ -563,6 +563,19 @@ async def run_collection(
                 except RiotAPIError as e:
                     console.print(f"  [yellow]Ladder {tier} failed: {e}[/yellow]")
 
+        # ── Reload any previously-queued but unscanned PUUIDs from DB ──
+        # This ensures resuming works correctly even if the seed is already scanned.
+        with db.get_connection() as conn:
+            pending = conn.execute(
+                "SELECT puuid FROM scanned_players WHERE scanned_at IS NULL"
+            ).fetchall()
+        for row in pending:
+            p = row["puuid"]
+            if p not in visited:
+                queue.append(p)
+        if pending:
+            console.print(f"[dim]Loaded {len(pending)} queued players from previous run.[/dim]")
+
         if not queue:
             console.print("[red]Queue is empty — nothing to collect.[/red]")
             return
