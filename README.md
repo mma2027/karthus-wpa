@@ -54,6 +54,10 @@ python main.py collect --seed "SqfeWalk#NA1" --max-players 50 -v
 
 # Seed from NA master/GM/challenger ladder (broad coverage)
 python main.py collect
+
+# Re-scan players last collected more than N days ago (fetch new games + update ranks)
+python main.py collect --refresh-days 14
+python main.py collect --seed "SqfeWalk#NA1" --refresh-days 7
 ```
 
 #### collect flags
@@ -133,6 +137,10 @@ python main.py players --tier CHALLENGER
 
 # Show all Karthus games stored for a player
 python main.py games "SqfeWalk#NA1"
+
+# Backfill rank data for players who were scanned before the rank fix
+# (safe to re-run; only updates players with missing tier/W/L)
+python main.py backfill
 
 # Wipe the database and start fresh (asks for confirmation)
 python main.py reset
