@@ -4,6 +4,7 @@ analyzer.py — Rich terminal output for WPA analysis.
 Entry points:
     print_player_analysis(name_tag, role, n_games)
     print_item_tierlist(role, purchase_rank)
+    print_rune_analysis(role)
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ console = Console()
 
 _item_names: dict[int, str] = {}
 _item_names_loaded           = False
+_rune_names: dict[int, str] = {}
+_rune_names_loaded           = False
 
 
 def _get_item_names() -> dict[int, str]:
@@ -45,6 +48,29 @@ def _get_item_names() -> dict[int, str]:
     except Exception:
         pass
     return _item_names
+
+
+def _get_rune_names() -> dict[int, str]:
+    global _rune_names, _rune_names_loaded
+    if _rune_names_loaded:
+        return _rune_names
+    _rune_names_loaded = True
+    try:
+        with urllib.request.urlopen(
+            "https://ddragon.leagueoflegends.com/api/versions.json", timeout=5
+        ) as r:
+            versions = json.loads(r.read())
+        version = versions[0]
+        url = f"https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/runesReforged.json"
+        with urllib.request.urlopen(url, timeout=10) as r:
+            data = json.loads(r.read())
+        for tree in data:
+            for slot in tree.get("slots", []):
+                for rune in slot.get("runes", []):
+                    _rune_names[rune["id"]] = rune["name"]
+    except Exception:
+        pass
+    return _rune_names
 
 
 def _fmt_wpa(wpa: float) -> str:
@@ -148,38 +174,97 @@ def print_player_analysis(
 # Item WPA tier list
 # ---------------------------------------------------------------------------
 
+_ALL_ROLES  = ["MID", "JUNGLE", "BOTTOM", "SUPPORT", "TOP"]
+_MAX_RANK   = 6   # maximum purchase slot to show when iterating all ranks
+
+
 def print_item_tierlist(
-    role: str,
-    purchase_rank: int = 1,
+    role: Optional[str] = None,
+    purchase_rank: Optional[int] = None,
 ) -> None:
-    """Print an item WPA tier list for a role."""
+    """
+    Print item WPA tier list(s).
+
+    If role is None, iterates over all roles that have data.
+    If purchase_rank is None, iterates over purchase slots 1–6 (skips empty ones).
+    """
+    roles = [role.upper()] if role else _ALL_ROLES
+    ranks = [purchase_rank] if purchase_rank else list(range(1, _MAX_RANK + 1))
+    explicit = bool(role and purchase_rank)  # True when user asked for something specific
+
+    names     = _get_item_names()
+    any_shown = False
+
+    for r in roles:
+        for rk in ranks:
+            try:
+                items = _wpa.item_wpa_tierlist(r, purchase_rank=rk)
+            except FileNotFoundError as e:
+                if explicit:
+                    console.print(f"[red]{e}[/red]")
+                continue
+
+            if not items:
+                if explicit:
+                    console.print("[yellow]No item data found. Need more games or a trained model.[/yellow]")
+                continue
+
+            any_shown = True
+            t = Table(
+                title=f"Item WPA — {r}  ·  Purchase #{rk}",
+                box=box.SIMPLE_HEAVY,
+            )
+            t.add_column("Rank",    justify="right", style="dim")
+            t.add_column("Item",    style="bold", min_width=24)
+            t.add_column("Avg WPA", justify="right")
+            t.add_column("Games",   justify="right")
+
+            for i, item in enumerate(items[:20], 1):
+                name = names.get(item["item_id"], f"Item {item['item_id']}")
+                t.add_row(str(i), name, _fmt_wpa(item["avg_wpa"]), str(item["game_count"]))
+
+            console.print(t)
+
+    if not any_shown and not explicit:
+        console.print("[yellow]No item data found. Collect games and train a model first.[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# Rune win rate analysis
+# ---------------------------------------------------------------------------
+
+def print_rune_analysis(role: str) -> None:
+    """Print a win rate breakdown by keystone rune for a role."""
     console.print(
-        f"\n[cyan]Computing item WPA — {role.upper()} (purchase #{purchase_rank})…[/cyan]"
+        f"\n[cyan]Computing rune win rates — {role.upper()}…[/cyan]"
     )
 
-    try:
-        items = _wpa.item_wpa_tierlist(role, purchase_rank=purchase_rank)
-    except FileNotFoundError as e:
-        console.print(f"[red]{e}[/red]")
+    runes = _wpa.rune_tierlist(role)
+
+    if not runes:
+        console.print("[yellow]No rune data found. Collect more games for this role.[/yellow]")
         return
 
-    if not items:
-        console.print("[yellow]No item data found. Need more games or a trained model.[/yellow]")
-        return
-
-    names = _get_item_names()
+    names = _get_rune_names()
 
     t = Table(
-        title=f"Item WPA — {role.upper()}  ·  Purchase #{purchase_rank}",
+        title=f"Keystone Win Rates — {role.upper()}",
         box=box.SIMPLE_HEAVY,
     )
-    t.add_column("Rank",    justify="right", style="dim")
-    t.add_column("Item",    style="bold", min_width=24)
-    t.add_column("Avg WPA", justify="right")
-    t.add_column("Games",   justify="right")
+    t.add_column("Rank",     justify="right", style="dim")
+    t.add_column("Keystone", style="bold", min_width=20)
+    t.add_column("Win Rate", justify="right")
+    t.add_column("Games",    justify="right")
 
-    for i, item in enumerate(items[:20], 1):
-        name = names.get(item["item_id"], f"Item {item['item_id']}")
-        t.add_row(str(i), name, _fmt_wpa(item["avg_wpa"]), str(item["game_count"]))
+    for i, rune in enumerate(runes, 1):
+        name     = names.get(rune["keystone_id"], f"Rune {rune['keystone_id']}")
+        wr_pct   = round(rune["win_rate"] * 100, 1)
+        wr_color = "green" if wr_pct >= 50 else "red"
+        t.add_row(
+            str(i),
+            name,
+            f"[{wr_color}]{wr_pct}%[/{wr_color}]",
+            str(rune["game_count"]),
+        )
 
     console.print(t)

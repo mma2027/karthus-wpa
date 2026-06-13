@@ -231,3 +231,59 @@ def item_wpa_tierlist(
     ]
     result.sort(key=lambda x: x["avg_wpa"], reverse=True)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Rune win rate tier list
+# ---------------------------------------------------------------------------
+
+def rune_tierlist(
+    role: str,
+    min_games: int = 3,
+) -> list[dict]:
+    """
+    Win rate by keystone rune across all stored games for a role.
+
+    Returns [{keystone_id, win_rate, game_count}] sorted by win_rate descending.
+    No model required — uses match outcomes directly.
+    """
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT ms.perks_json, m.win
+            FROM match_stats ms
+            JOIN matches m ON ms.match_id = m.match_id
+            WHERE m.karthus_role = ?
+            """,
+            (role.upper(),),
+        ).fetchall()
+
+    if not rows:
+        return []
+
+    accum: dict[int, dict] = {}  # keystone_id → {"wins": int, "count": int}
+
+    for row in rows:
+        try:
+            perks = json.loads(row["perks_json"] or "{}")
+            keystone_id = perks["styles"][0]["selections"][0]["perk"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+            continue
+
+        if keystone_id not in accum:
+            accum[keystone_id] = {"wins": 0, "count": 0}
+        accum[keystone_id]["count"] += 1
+        if row["win"]:
+            accum[keystone_id]["wins"] += 1
+
+    result = [
+        {
+            "keystone_id": keystone_id,
+            "win_rate":    round(v["wins"] / v["count"], 3),
+            "game_count":  v["count"],
+        }
+        for keystone_id, v in accum.items()
+        if v["count"] >= min_games
+    ]
+    result.sort(key=lambda x: x["win_rate"], reverse=True)
+    return result

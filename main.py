@@ -23,7 +23,7 @@ from rich.table import Table, box
 
 import db
 from collector import run_collection
-from analyzer import print_player_analysis, print_item_tierlist
+from analyzer import print_player_analysis, print_item_tierlist, print_rune_analysis
 
 load_dotenv()
 console = Console()
@@ -237,13 +237,19 @@ def cmd_analyze(args: argparse.Namespace) -> None:
 
 
 def cmd_tierlist(args: argparse.Namespace) -> None:
-    """Print item WPA tier list for a role."""
+    """Print item WPA tier list(s)."""
+    role = (args.role or "").upper() or None
+    rank = args.purchase_rank or None
+    print_item_tierlist(role, purchase_rank=rank)
+
+
+def cmd_rune(args: argparse.Namespace) -> None:
+    """Print keystone rune win rates for a role."""
     role = (args.role or "").upper()
     if not role:
-        console.print("[red]--role is required. Example: python main.py tierlist --role MID[/red]")
+        console.print("[red]--role is required. Example: python main.py rune --role MID[/red]")
         return
-    rank = args.purchase_rank or 1
-    print_item_tierlist(role, purchase_rank=rank)
+    print_rune_analysis(role)
 
 
 def cmd_reset(_args: argparse.Namespace) -> None:
@@ -305,9 +311,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_analyze.add_argument("--games",       metavar="N",         type=int, default=20, help="Number of recent games to analyze (default: 20)")
 
     # tierlist
-    p_tier = sub.add_parser("tierlist", help="Show item WPA tier list for a role")
-    p_tier.add_argument("--role",          metavar="ROLE",  required=True, help="Role (MID, JUNGLE, BOTTOM, SUPPORT, TOP)")
-    p_tier.add_argument("--purchase-rank", metavar="N",     type=int, default=1, help="1 = first item, 2 = second item, etc. (default: 1)")
+    p_tier = sub.add_parser("tierlist", help="Show item WPA tier list (omit flags to show all roles and ranks)")
+    p_tier.add_argument("--role",          metavar="ROLE", help="Filter to one role (MID, JUNGLE, BOTTOM, SUPPORT, TOP); default: all roles")
+    p_tier.add_argument("--purchase-rank", metavar="N",    type=int, help="Filter to one purchase slot (1=first item, 2=second, …); default: all")
+
+    # rune
+    p_rune = sub.add_parser("rune", help="Show keystone rune win rates for a role")
+    p_rune.add_argument("--role", metavar="ROLE", required=True, help="Role (MID, JUNGLE, BOTTOM, SUPPORT, TOP)")
 
     # reset
     sub.add_parser("reset", help="Wipe the database and start fresh (asks for confirmation)")
@@ -335,6 +345,8 @@ def main() -> None:
         cmd_analyze(args)
     elif args.command == "tierlist":
         cmd_tierlist(args)
+    elif args.command == "rune":
+        cmd_rune(args)
     elif args.command == "reset":
         cmd_reset(args)
     else:
@@ -348,7 +360,9 @@ def main() -> None:
             "  [green]games NAME#TAG[/green]              Show games for a player\n"
             "  [green]train --role ROLE[/green]           Train win probability model\n"
             "  [green]analyze NAME#TAG[/green]            WPA breakdown for a player\n"
-            "  [green]tierlist --role ROLE[/green]        Item WPA tier list\n"
+            "  [green]tierlist[/green]                    Item WPA tier list (all roles & ranks)\n"
+            "  [green]tierlist --role ROLE[/green]        Item WPA tier list for one role\n"
+            "  [green]rune --role ROLE[/green]            Keystone rune win rates\n"
             "  [green]reset[/green]                      Wipe database and start fresh\n\n"
             "Run [bold]python main.py --help[/bold] for full usage.",
             title="[bold]Karthus WPA[/bold]",

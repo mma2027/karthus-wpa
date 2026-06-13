@@ -31,6 +31,8 @@ RIOT_API_KEY=RGAPI-your-key-here
 RIOT_PLATFORM=na1
 ```
 
+> **CUDA note:** `requirements.txt` points to the PyTorch CUDA 12.1 index, compatible with NVIDIA drivers supporting CUDA 12.1–12.2. If your driver is newer or you want CPU-only, replace the `--extra-index-url` line in `requirements.txt` with `https://download.pytorch.org/whl/cpu` before installing.
+
 ---
 
 Each session, activate the environment first:
@@ -73,7 +75,7 @@ python main.py train --role JUNGLE
 python main.py train --role JUNGLE --patch-window 3   # restrict to 3 most recent patches
 ```
 
-Trains a feedforward neural network (PyTorch) on per-minute timeline frames. Saves the model and scaler to `models/`. One model per role.
+Trains a feedforward neural network (PyTorch) on per-minute timeline frames. Saves the model and scaler to `models/`. One model per role. The model is loaded automatically by `analyze` and `tierlist`.
 
 ### 3. Analyze a player
 
@@ -83,18 +85,34 @@ python main.py analyze "SqfeWalk#NA1" --role JUNGLE
 python main.py analyze "SqfeWalk#NA1" --role MID --games 30
 ```
 
-Prints a WPA breakdown table — how much each event type (R kills, deaths, dragons, etc.) shifted win probability on average across the player's recent games.
+Prints a WPA breakdown table — how much each event type (R kills, deaths, dragons, etc.) shifted win probability on average across the player's recent games. Requires a trained model for the relevant role.
 
 ### 4. Item WPA tier list
 
 ```bash
+# All roles and all purchase slots (1–6)
+python main.py tierlist
+
+# One role, all purchase slots
 python main.py tierlist --role MID
+
+# One role, specific purchase slot
+python main.py tierlist --role MID --purchase-rank 1   # first item
 python main.py tierlist --role JUNGLE --purchase-rank 2   # second item
 ```
 
-Ranks items by their average WPA at purchase time across all stored games for that role.
+Ranks items by their average WPA at purchase time. Requires a trained model. Tables with insufficient data (< 3 games) are skipped automatically.
 
-### 5. Database utilities
+### 5. Keystone rune win rates
+
+```bash
+python main.py rune --role MID
+python main.py rune --role JUNGLE
+```
+
+Shows win rate by keystone rune across all stored games for a role. Does **not** require a trained model — uses raw match outcomes directly.
+
+### 6. Database utilities
 
 ```bash
 # Database overview
@@ -133,9 +151,9 @@ karthus-wpa/
 ├── collector.py        # BFS data collection pipeline
 ├── features.py         # Feature extraction from timeline frames (384-dim vectors)
 ├── model.py            # PyTorch WinProbNet (feedforward) + training loop
-├── wpa.py              # WPA calculator
-├── analyzer.py         # Per-player WPA analysis + item tier list (Rich output)
-└── main.py             # Rich CLI entry point
+├── wpa.py              # WPA calculator + rune/item tier list aggregators
+├── analyzer.py         # Rich terminal output (player analysis, tier lists, rune analysis)
+└── main.py             # CLI entry point
 ```
 
 ---
@@ -147,7 +165,8 @@ karthus-wpa/
 - [x] Win probability model training (`model.py`)
 - [x] WPA calculator (`wpa.py`)
 - [x] Per-player WPA breakdown CLI (`analyzer.py`)
-- [x] Item WPA tierlist
+- [x] Item WPA tier list (all roles and purchase slots)
+- [x] Keystone rune win rate tier list
 - [ ] Challenger benchmark comparison column in analyze output
 - [ ] LSTM sequence model (v2) for better temporal modeling
 
