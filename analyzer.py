@@ -53,19 +53,35 @@ def _get_item_names() -> dict[int, str]:
     return _item_names
 
 
+# Starter items are a fixed, intentional set — heuristics are too broad
+# because basic components (Amplifying Tome, Sapphire Crystal, etc.) also
+# have no sub-ingredients and low cost.
+_STARTER_ITEM_IDS: frozenset[int] = frozenset({
+    1054,  # Doran's Shield
+    1055,  # Doran's Blade
+    1056,  # Doran's Ring
+    1082,  # Dark Seal
+    1086,  # Cull
+})
+
+
 def _is_valid_tierlist_item(item_id: int) -> bool:
     """
     Return True only for starter items and completed legendary items.
 
-    Starters  : no component ingredients, cost ≤ 1 000 g (Doran's, Dark Seal, Cull …)
-    Legendaries: built from components, doesn't upgrade into another purchasable
-                 item, total cost ≥ 2 500 g
-    Excluded  : trinkets, consumables, boots, component/intermediate items,
-                wards, anything not sold in the shop.
+    Starters   : hardcoded set (Doran's items, Dark Seal, Cull).
+    Legendaries: has recipe components, doesn't upgrade into another
+                 *purchasable* item (Ornn upgrade entries are non-purchasable
+                 and ignored), total cost ≥ 2 500 g.
+    Excluded   : everything else — components, boots, trinkets, consumables,
+                 wards, intermediate items, anything not in the shop.
     """
+    if item_id in _STARTER_ITEM_IDS:
+        return True
+
     d = _item_data.get(item_id)
     if d is None:
-        return True  # unknown item: include rather than silently drop
+        return False  # unknown item: don't show garbage IDs
 
     tags = d.get("tags", [])
     gold = d.get("gold", {})
@@ -78,12 +94,7 @@ def _is_valid_tierlist_item(item_id: int) -> bool:
     has_components = bool(d.get("from", []))
     total_cost     = gold.get("total", 0)
 
-    # Starter: no recipe, low cost
-    if not has_components and 0 < total_cost <= 1000:
-        return True
-
-    # Legendary: built from components, doesn't build into another
-    # *purchasable* item (ignores un-purchasable Ornn upgrade entries)
+    # Legendary: built from components, doesn't build into another purchasable item
     into           = d.get("into", [])
     builds_further = any(
         _item_data.get(int(iid), {}).get("gold", {}).get("purchasable", False)
