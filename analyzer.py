@@ -248,13 +248,28 @@ def print_item_tierlist(
     ranks = [purchase_rank] if purchase_rank else list(range(1, _MAX_RANK + 1))
     explicit = bool(role and purchase_rank)  # True when user asked for something specific
 
-    names     = _get_item_names()
+    names = _get_item_names()
+
+    # Build the valid item set used to filter purchase-rank counting in wpa.py.
+    # If Data Dragon didn't load we pass None (no pre-filtering; post-filter is
+    # still applied for the hardcoded starters).
+    if _item_data:
+        valid_ids: Optional[frozenset] = frozenset(
+            iid for iid in _item_data if _is_valid_tierlist_item(iid)
+        ) | _STARTER_ITEM_IDS
+    else:
+        valid_ids = None
+        console.print(
+            "[yellow]Note: Data Dragon item data unavailable — purchase rank includes "
+            "all items (components, wards, etc.). Results may be noisy.[/yellow]"
+        )
+
     any_shown = False
 
     for r in roles:
         for rk in ranks:
             try:
-                items = _wpa.item_wpa_tierlist(r, purchase_rank=rk)
+                items = _wpa.item_wpa_tierlist(r, purchase_rank=rk, valid_item_ids=valid_ids)
             except FileNotFoundError as e:
                 if explicit:
                     console.print(f"[red]{e}[/red]")

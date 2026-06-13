@@ -171,12 +171,16 @@ def item_wpa_tierlist(
     role: str,
     purchase_rank: int = 1,
     min_games: int = 3,
+    valid_item_ids: Optional[frozenset] = None,
 ) -> list[dict]:
     """
-    Average WPA for the Nth item purchase (by timestamp) across all games.
+    Average WPA for the Nth starter/legendary item purchase across all games.
 
-    purchase_rank=1: first completed item per game
-    purchase_rank=2: second completed item
+    purchase_rank=1: first starter or legendary item bought per game
+    purchase_rank=2: second starter or legendary item bought per game
+
+    valid_item_ids: frozenset of item IDs to count (starters + legendaries).
+    If None, all ITEM_PURCHASE events are counted (includes components).
 
     Returns [{item_id, avg_wpa, game_count}] sorted by avg_wpa descending.
     Raises FileNotFoundError if no model is trained for this role.
@@ -205,6 +209,13 @@ def item_wpa_tierlist(
             [e for e in events if e["event_type"] == "ITEM_PURCHASE"],
             key=lambda e: e["timestamp_ms"],
         )
+
+        # Pre-filter to starters/legendaries so purchase rank counts only real items
+        if valid_item_ids is not None:
+            item_events = [
+                e for e in item_events
+                if json.loads(e.get("detail_json") or "{}").get("item_id") in valid_item_ids
+            ]
 
         if len(item_events) < purchase_rank:
             continue
