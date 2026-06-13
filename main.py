@@ -42,8 +42,9 @@ def cmd_collect(args: argparse.Namespace) -> None:
         console.print("[red]RIOT_API_KEY not set in .env — cannot collect.[/red]")
         sys.exit(1)
 
-    seed        = args.seed or None
-    max_players = args.max_players or None
+    seed         = args.seed or None
+    max_players  = args.max_players or None
+    refresh_days = args.refresh_days or None
 
     if seed:
         console.print(
@@ -73,6 +74,7 @@ def cmd_collect(args: argparse.Namespace) -> None:
             platform=platform,
             verbose=args.verbose,
             patch_window=args.patch_window,
+            refresh_days=refresh_days,
         )
     )
 
@@ -119,9 +121,10 @@ def cmd_players(args: argparse.Namespace) -> None:
     else:
         with db.get_connection() as conn:
             players = conn.execute(
-                "SELECT * FROM players ORDER BY tier, lp DESC LIMIT 100"
+                # tier IS NULL sorts 0 (ranked) before 1 (unranked), then by LP desc
+                "SELECT * FROM players ORDER BY tier IS NULL, lp DESC LIMIT 100"
             ).fetchall()
-        title = "Players (top 100)"
+        title = "Players (top 100 by LP)"
 
     if not players:
         console.print("[yellow]No players found.[/yellow]")
@@ -252,6 +255,62 @@ def cmd_rune(args: argparse.Namespace) -> None:
     print_rune_analysis(role)
 
 
+def cmd_backfill(_args: argparse.Namespace) -> None:
+    """Backfill rank data for scanned players who are missing it."""
+    import aiohttp
+    from riot_client import RiotClient, make_session
+
+    api_key  = os.getenv("RIOT_API_KEY", "")
+    platform = os.getenv("RIOT_PLATFORM", "na1")
+
+    if not api_key or api_key.startswith("RGAPI-your"):
+        console.print("[red]RIOT_API_KEY not set in .env[/red]")
+        return
+
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT p.puuid FROM players p
+            JOIN scanned_players s ON p.puuid = s.puuid
+            WHERE p.tier IS NULL AND s.scanned_at IS NOT NULL
+            """
+        ).fetchall()
+
+    puuids = [r["puuid"] for r in rows]
+    if not puuids:
+        console.print("[green]No players missing rank data.[/green]")
+        return
+
+    console.print(f"[cyan]Backfilling rank for {len(puuids)} players…[/cyan]")
+
+    updated = 0
+    unranked = 0
+
+    async def _run():
+        nonlocal updated, unranked
+        async with make_session() as session:
+            client = RiotClient(api_key=api_key, platform=platform, session=session)
+            for i, puuid in enumerate(puuids, 1):
+                rank = await client.get_rank_by_puuid(puuid)
+                if rank:
+                    db.upsert_player(
+                        puuid, "", "", platform,
+                        tier     = rank.get("tier"),
+                        division = rank.get("rank"),
+                        lp       = rank.get("leaguePoints"),
+                        wins     = rank.get("wins"),
+                        losses   = rank.get("losses"),
+                    )
+                    updated += 1
+                else:
+                    unranked += 1
+                if i % 10 == 0:
+                    console.print(f"  [dim]{i}/{len(puuids)}  updated={updated}  unranked={unranked}[/dim]")
+
+    asyncio.run(_run())
+    console.print(f"[green]Done.[/green]  Rank stored: [bold]{updated}[/bold]  Unranked/not found: [bold]{unranked}[/bold]")
+
+
 def cmd_reset(_args: argparse.Namespace) -> None:
     """Wipe the database — deletes all collected data and recreates empty schema."""
     console.print(
@@ -285,7 +344,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_collect = sub.add_parser("collect", help="Collect Karthus games from the Riot API")
     p_collect.add_argument("--seed",         metavar="NAME#TAG", help="Seed player Riot ID (e.g. SqfeWalk#NA1)")
     p_collect.add_argument("--max-players",  metavar="N", type=int, help="Stop after N players (for testing)")
-    p_collect.add_argument("--patch-window", metavar="N", type=int, default=5, help="Only store games from the N most recent patches (default: 5)")
+    p_collect.add_argument("--patch-window",  metavar="N", type=int, default=5, help="Only store games from the N most recent patches (default: 5)")
+    p_collect.add_argument("--refresh-days",  metavar="N", type=int, help="Re-scan players last collected more than N days ago (fetches new games, updates rank)")
     p_collect.add_argument("--verbose", "-v", action="store_true", help="Print each player and match being fetched")
 
     # stats
@@ -293,31 +353,58 @@ def build_parser() -> argparse.ArgumentParser:
 
     # players
     p_players = sub.add_parser("players", help="List players in the database")
-    p_players.add_argument("--tier", metavar="TIER", help="Filter by tier (e.g. DIAMOND, CHALLENGER)")
+    p_players.add_argument(
+        "--tier", metavar="TIER",
+        help="Filter by tier. Valid values: IRON, BRONZE, SILVER, GOLD, PLATINUM, EMERALD, DIAMOND, MASTER, GRANDMASTER, CHALLENGER. "
+             "Only players the crawler has fully scanned will have rank data.",
+    )
 
     # games
     p_games = sub.add_parser("games", help="Show stored Karthus games for a player")
-    p_games.add_argument("name", metavar="NAME#TAG", help="Player Riot ID")
+    p_games.add_argument("name", metavar="NAME#TAG", help="Player Riot ID (e.g. SqfeWalk#NA1)")
 
     # train
     p_train = sub.add_parser("train", help="Train a win probability model for a role")
-    p_train.add_argument("--role",         metavar="ROLE",  required=True, help="Role to train (MID, JUNGLE, BOTTOM, SUPPORT, TOP)")
-    p_train.add_argument("--patch-window", metavar="N",     type=int,      help="Restrict training to N most recent patches")
+    p_train.add_argument(
+        "--role", metavar="ROLE", required=True,
+        help="Role to train. Valid values: MID, JUNGLE, BOTTOM, SUPPORT, TOP. "
+             "Requires 100+ games for that role (500+ for best results). "
+             "Saves model to models/wp_{role}.pt and scaler to models/scaler_{role}.pkl.",
+    )
+    p_train.add_argument("--patch-window", metavar="N", type=int,
+                         help="Restrict training to N most recent patches (default: all patches)")
 
     # analyze
     p_analyze = sub.add_parser("analyze", help="Show WPA breakdown for a player")
-    p_analyze.add_argument("name",          metavar="NAME#TAG",  help="Player Riot ID")
-    p_analyze.add_argument("--role",        metavar="ROLE",      help="Filter to a specific role")
-    p_analyze.add_argument("--games",       metavar="N",         type=int, default=20, help="Number of recent games to analyze (default: 20)")
+    p_analyze.add_argument("name", metavar="NAME#TAG", help="Player Riot ID (e.g. SqfeWalk#NA1)")
+    p_analyze.add_argument(
+        "--role", metavar="ROLE",
+        help="Filter to one role. Valid values: MID, JUNGLE, BOTTOM, SUPPORT, TOP. "
+             "If omitted, uses the role with the most stored games for this player.",
+    )
+    p_analyze.add_argument("--games", metavar="N", type=int, default=20,
+                           help="Number of recent games to analyze (default: 20)")
 
     # tierlist
-    p_tier = sub.add_parser("tierlist", help="Show item WPA tier list (omit flags to show all roles and ranks)")
-    p_tier.add_argument("--role",          metavar="ROLE", help="Filter to one role (MID, JUNGLE, BOTTOM, SUPPORT, TOP); default: all roles")
-    p_tier.add_argument("--purchase-rank", metavar="N",    type=int, help="Filter to one purchase slot (1=first item, 2=second, …); default: all")
+    p_tier = sub.add_parser("tierlist", help="Show item WPA tier list (omit flags to show all roles and purchase slots)")
+    p_tier.add_argument(
+        "--role", metavar="ROLE",
+        help="Filter to one role. Valid values: MID, JUNGLE, BOTTOM, SUPPORT, TOP. Default: all roles.",
+    )
+    p_tier.add_argument(
+        "--purchase-rank", metavar="N", type=int,
+        help="Filter to one purchase slot: 1=first item bought, 2=second, etc. Default: all slots.",
+    )
 
     # rune
     p_rune = sub.add_parser("rune", help="Show keystone rune win rates for a role")
-    p_rune.add_argument("--role", metavar="ROLE", required=True, help="Role (MID, JUNGLE, BOTTOM, SUPPORT, TOP)")
+    p_rune.add_argument(
+        "--role", metavar="ROLE", required=True,
+        help="Role to analyze. Valid values: MID, JUNGLE, BOTTOM, SUPPORT, TOP.",
+    )
+
+    # backfill
+    sub.add_parser("backfill", help="Re-fetch rank data for scanned players missing tier/W/L")
 
     # reset
     sub.add_parser("reset", help="Wipe the database and start fresh (asks for confirmation)")
@@ -347,24 +434,40 @@ def main() -> None:
         cmd_tierlist(args)
     elif args.command == "rune":
         cmd_rune(args)
+    elif args.command == "backfill":
+        cmd_backfill(args)
     elif args.command == "reset":
         cmd_reset(args)
     else:
         # No subcommand: show help + quick stats
         console.print(Panel(
             "[bold cyan]Karthus WPA[/bold cyan]\n\n"
-            "  [green]collect[/green]                    Collect games from Riot API\n"
-            "  [green]collect --seed NAME#TAG[/green]    BFS from one player\n"
-            "  [green]stats[/green]                      Database overview\n"
-            "  [green]players[/green]                    List collected players\n"
-            "  [green]games NAME#TAG[/green]              Show games for a player\n"
-            "  [green]train --role ROLE[/green]           Train win probability model\n"
-            "  [green]analyze NAME#TAG[/green]            WPA breakdown for a player\n"
-            "  [green]tierlist[/green]                    Item WPA tier list (all roles & ranks)\n"
-            "  [green]tierlist --role ROLE[/green]        Item WPA tier list for one role\n"
-            "  [green]rune --role ROLE[/green]            Keystone rune win rates\n"
-            "  [green]reset[/green]                      Wipe database and start fresh\n\n"
-            "Run [bold]python main.py --help[/bold] for full usage.",
+            "[bold]Data collection[/bold]\n"
+            "  [green]collect[/green]                              Seed from NA master/GM/challenger ladder\n"
+            "  [green]collect --seed NAME#TAG[/green]              BFS from one player (e.g. SqfeWalk#NA1)\n"
+            "  [green]collect --seed NAME#TAG --max-players N[/green]  Stop after N players (good for testing)\n"
+            "  [green]collect --patch-window N[/green]             Only keep games from N most recent patches (default: 5)\n"
+            "  [green]collect --refresh-days N[/green]             Re-scan players last collected >N days ago\n\n"
+            "[bold]Inspection[/bold]\n"
+            "  [green]stats[/green]                                Database overview (games, players, scanned/queued)\n"
+            "  [green]players[/green]                              List players (top 100 by rank)\n"
+            "  [green]players --tier TIER[/green]                  Filter by tier — valid: [dim]IRON BRONZE SILVER GOLD PLATINUM EMERALD DIAMOND MASTER GRANDMASTER CHALLENGER[/dim]\n"
+            "                                               [dim](rank only shows for fully-scanned players)[/dim]\n"
+            "  [green]games NAME#TAG[/green]                       Show stored Karthus games for a player\n\n"
+            "[bold]ML[/bold]\n"
+            "  [green]train --role ROLE[/green]                    Train win probability model — valid roles: [dim]MID JUNGLE BOTTOM SUPPORT TOP[/dim]\n"
+            "  [green]train --role ROLE --patch-window N[/green]   Restrict training to N most recent patches\n\n"
+            "[bold]Analysis[/bold]  [dim](requires a trained model for the role)[/dim]\n"
+            "  [green]analyze NAME#TAG[/green]                     WPA breakdown for a player\n"
+            "  [green]analyze NAME#TAG --role ROLE[/green]         Filter to one role\n"
+            "  [green]analyze NAME#TAG --games N[/green]           Use N most recent games (default: 20)\n"
+            "  [green]tierlist[/green]                             Item WPA tier list (all roles, all purchase slots)\n"
+            "  [green]tierlist --role ROLE[/green]                 One role only\n"
+            "  [green]tierlist --role ROLE --purchase-rank N[/green]  One purchase slot (1=first item, 2=second, …)\n"
+            "  [green]rune --role ROLE[/green]                     Keystone rune win rates (no model needed)\n\n"
+            "[bold]Other[/bold]\n"
+            "  [green]backfill[/green]                             Re-fetch rank for scanned players missing tier/W/L\n"
+            "  [green]reset[/green]                                Wipe database (asks for confirmation)\n",
             title="[bold]Karthus WPA[/bold]",
             border_style="cyan",
             expand=False,

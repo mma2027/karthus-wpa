@@ -163,10 +163,30 @@ class RiotClient:
         """
         Returns the RANKED_SOLO_5x5 entry for this summoner, or None if unranked.
         Fields: {tier, rank, leaguePoints, wins, losses, ...}
+        NOTE: deprecated in favour of get_rank_by_puuid for newer accounts.
         """
         url = (
             f"https://{self.platform}.api.riotgames.com"
             f"/lol/league/v4/entries/by-summoner/{summoner_id}"
+        )
+        try:
+            entries: list = await self._get(url)
+            for entry in entries:
+                if entry.get("queueType") == RANKED_SOLO_QUEUE:
+                    return entry
+            return None
+        except RiotAPIError:
+            return None
+
+    async def get_rank_by_puuid(self, puuid: str) -> Optional[dict]:
+        """
+        Returns the RANKED_SOLO_5x5 entry for this PUUID, or None if unranked.
+        Uses the newer PUUID-based endpoint — does not require a summoner ID.
+        Fields: {tier, rank, leaguePoints, wins, losses, ...}
+        """
+        url = (
+            f"https://{self.platform}.api.riotgames.com"
+            f"/lol/league/v4/entries/by-puuid/{puuid}"
         )
         try:
             entries: list = await self._get(url)

@@ -418,28 +418,19 @@ async def _process_player(
     """Fetch and store all Karthus games for one player, then expand queue."""
     is_seed = puuid == seed_puuid
 
-    try:
-        # 1. Resolve summoner details + rank (non-fatal if it fails)
-        summoner    = await client.get_summoner_by_puuid(puuid)
-        summoner_id = summoner.get("id", "")
-        rank_info   = await client.get_rank(summoner_id) if summoner_id else None
-
-        # Upsert with empty name strings — db preserves existing non-empty values
-        db.upsert_player(
-            puuid       = puuid,
-            game_name   = "",
-            tag_line    = "",
-            region      = region,
-            summoner_id = summoner_id,
-            tier        = rank_info.get("tier")         if rank_info else None,
-            division    = rank_info.get("rank")         if rank_info else None,
-            lp          = rank_info.get("leaguePoints") if rank_info else None,
-            wins        = rank_info.get("wins")         if rank_info else None,
-            losses      = rank_info.get("losses")       if rank_info else None,
-        )
-
-    except RiotAPIError:
-        pass  # non-fatal; player row already upserted from match data
+    # 1. Fetch rank via PUUID-based endpoint (no summoner ID required)
+    rank_info = await client.get_rank_by_puuid(puuid)
+    db.upsert_player(
+        puuid     = puuid,
+        game_name = "",
+        tag_line  = "",
+        region    = region,
+        tier      = rank_info.get("tier")         if rank_info else None,
+        division  = rank_info.get("rank")         if rank_info else None,
+        lp        = rank_info.get("leaguePoints") if rank_info else None,
+        wins      = rank_info.get("wins")         if rank_info else None,
+        losses    = rank_info.get("losses")       if rank_info else None,
+    )
 
     if verbose:
         player_row = db.get_player(puuid)
@@ -532,6 +523,7 @@ async def run_collection(
     platform: str = "na1",
     verbose: bool = False,
     patch_window: int = 5,
+    refresh_days: Optional[int] = None,
 ) -> None:
     """
     Main entry point for the collection pipeline.
@@ -540,6 +532,7 @@ async def run_collection(
                    None  → seed from NA master/GM/challenger ladder
     max_players  : stop after processing this many unique players (testing)
     patch_window : only store games from the N most recent patches (default 5)
+    refresh_days : re-scan players last scanned more than N days ago (default: skip already-scanned)
     """
     db.init_db()
 
@@ -616,8 +609,23 @@ async def run_collection(
                 except RiotAPIError as e:
                     console.print(f"  [yellow]Ladder {tier} failed: {e}[/yellow]")
 
-        # ── Reload any previously-queued but unscanned PUUIDs from DB ──
-        # This ensures resuming works correctly even if the seed is already scanned.
+        # ── Mark stale players for re-scan ────────────────────────────
+        if refresh_days is not None:
+            cutoff_ms = int((_time.time() - refresh_days * 86400) * 1000)
+            with db.get_connection() as conn:
+                stale_count = conn.execute(
+                    "UPDATE scanned_players SET scanned_at = NULL WHERE scanned_at < ?",
+                    (cutoff_ms,),
+                ).rowcount
+            if stale_count:
+                console.print(
+                    f"[cyan]Refreshing {stale_count} players last scanned "
+                    f"more than {refresh_days} day(s) ago.[/cyan]"
+                )
+
+        # ── Reload any previously-queued or stale PUUIDs from DB ──────
+        # This ensures resuming works correctly even if the seed is already scanned,
+        # and picks up any players reset by --refresh-days above.
         with db.get_connection() as conn:
             pending = conn.execute(
                 "SELECT puuid FROM scanned_players WHERE scanned_at IS NULL"
@@ -627,7 +635,7 @@ async def run_collection(
             if p not in visited:
                 queue.append(p)
         if pending:
-            console.print(f"[dim]Loaded {len(pending)} queued players from previous run.[/dim]")
+            console.print(f"[dim]Loaded {len(pending)} queued/stale players from DB.[/dim]")
 
         if not queue:
             console.print("[red]Queue is empty — nothing to collect.[/red]")
