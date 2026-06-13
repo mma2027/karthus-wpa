@@ -18,6 +18,18 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 
+
+def patch_sort_key(patch: str) -> tuple[int, int]:
+    """Numeric sort key for patch strings like '16.9', '16.10'.
+
+    Prevents lexicographic mis-ordering where '16.9' > '16.10'.
+    """
+    try:
+        major, minor = patch.split(".", 1)
+        return (int(major), int(minor))
+    except (ValueError, AttributeError):
+        return (0, 0)
+
 DB_PATH = Path(__file__).parent / "karthus.db"
 
 # ---------------------------------------------------------------------------
@@ -502,11 +514,12 @@ def get_collection_stats(db_path: Path = DB_PATH) -> dict:
                 "SELECT karthus_role, COUNT(*) AS cnt FROM matches GROUP BY karthus_role"
             ).fetchall()
         }
+        patch_rows = conn.execute(
+            "SELECT patch, COUNT(*) AS cnt FROM matches GROUP BY patch"
+        ).fetchall()
         games_by_patch = {
             row["patch"]: row["cnt"]
-            for row in conn.execute(
-                "SELECT patch, COUNT(*) AS cnt FROM matches GROUP BY patch ORDER BY patch DESC"
-            ).fetchall()
+            for row in sorted(patch_rows, key=lambda r: patch_sort_key(r["patch"]), reverse=True)
         }
 
     return {

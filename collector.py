@@ -559,7 +559,7 @@ async def run_collection(
         start_time: Optional[int] = int(_time.time()) - (patch_window * 14 * 24 * 3600)
         if valid_patches:
             console.print(
-                f"[dim]Patch window ({patch_window}): {', '.join(sorted(valid_patches, reverse=True))}[/dim]"
+                f"[dim]Patch window ({patch_window}): {', '.join(sorted(valid_patches, key=db.patch_sort_key, reverse=True))}[/dim]"
             )
         else:
             console.print("[yellow]Could not fetch patch list — collecting all patches.[/yellow]")

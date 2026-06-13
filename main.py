@@ -223,7 +223,7 @@ def cmd_train(args: argparse.Namespace) -> None:
                 return await _fetch_valid_patches(s, args.patch_window)
         patches = asyncio.run(_get_patches())
         if patches:
-            console.print(f"[dim]Patch window ({args.patch_window}): {', '.join(sorted(patches, reverse=True))}[/dim]")
+            console.print(f"[dim]Patch window ({args.patch_window}): {', '.join(sorted(patches, key=db.patch_sort_key, reverse=True))}[/dim]")
 
     mdl.train_model(role, patches=patches)
 
