@@ -1,6 +1,6 @@
 # karthus-wpa
 
-**Win Probability Added (WPA) analyzer for Karthus** — collects ranked solo/duo games from the Riot API, stores per-minute timeline data in SQLite, and (once enough data is collected) trains a per-role PyTorch model to compute WPA for Karthus-specific in-game events.
+**Win Probability Added (WPA) analyzer for Karthus** — collects ranked solo/duo games from the Riot API, stores per-minute timeline data in SQLite, trains a per-role PyTorch model to estimate win probability, and computes WPA for Karthus-specific in-game events (R kills, deaths, item purchases, objectives).
 
 Inspired by [Coachless.gg](https://coachless.gg). Supports all five Karthus roles (MID, JUNGLE, BOTTOM, SUPPORT, TOP) with separate data and models per role.
 
@@ -9,7 +9,7 @@ Inspired by [Coachless.gg](https://coachless.gg). Supports all five Karthus role
 ## Requirements
 
 - Python 3.9+
-- A [Riot Games API key](https://developer.riotgames.com/) (dev key works; personal key rate-limited to 20 req/s)
+- A [Riot Games API key](https://developer.riotgames.com/) (dev key works; rate-limited to 20 req/s)
 
 ---
 
@@ -40,18 +40,63 @@ source .venv/bin/activate
 
 ## Usage
 
+### 1. Collect games
+
 ```bash
-# Collect games — BFS from one player (good for testing)
+# BFS from one player (good for testing)
 python main.py collect --seed "SqfeWalk#NA1"
 python main.py collect --seed "SqfeWalk#NA1" --max-players 50
 
-# Verbose mode: print each player and match being fetched
-python main.py collect --seed "SqfeWalk#NA1" --max-players 50 --verbose
+# Verbose mode: print each player and match as they are fetched
 python main.py collect --seed "SqfeWalk#NA1" --max-players 50 -v
 
-# Collect games — seed from NA master/GM/challenger ladder
+# Seed from NA master/GM/challenger ladder (broad coverage)
 python main.py collect
+```
 
+#### collect flags
+
+| Flag | Description |
+|---|---|
+| `--seed NAME#TAG` | Start BFS from a specific player |
+| `--max-players N` | Stop after N players (useful for testing) |
+| `--patch-window N` | Only store games from the N most recent patches (default: 5). Patch list fetched automatically from Data Dragon. |
+| `--verbose` / `-v` | Print each player name, rank, and match as they are fetched |
+
+### 2. Train a model
+
+Once you have enough games collected (100+ per role recommended, 500+ for best results):
+
+```bash
+python main.py train --role MID
+python main.py train --role JUNGLE
+python main.py train --role JUNGLE --patch-window 3   # restrict to 3 most recent patches
+```
+
+Trains a feedforward neural network (PyTorch) on per-minute timeline frames. Saves the model and scaler to `models/`. One model per role.
+
+### 3. Analyze a player
+
+```bash
+python main.py analyze "SqfeWalk#NA1"
+python main.py analyze "SqfeWalk#NA1" --role JUNGLE
+python main.py analyze "SqfeWalk#NA1" --role MID --games 30
+```
+
+Prints a WPA breakdown table — how much each event type (R kills, deaths, dragons, etc.) shifted win probability on average across the player's recent games.
+
+### 4. Item WPA tier list
+
+```bash
+python main.py tierlist --role MID
+python main.py tierlist --role JUNGLE --purchase-rank 2   # second item
+```
+
+Ranks items by their average WPA at purchase time across all stored games for that role.
+
+### 5. Database utilities
+
+```bash
 # Database overview
 python main.py stats
 
@@ -65,15 +110,6 @@ python main.py games "SqfeWalk#NA1"
 # Wipe the database and start fresh (asks for confirmation)
 python main.py reset
 ```
-
-### collect flags
-
-| Flag | Description |
-|---|---|
-| `--seed NAME#TAG` | Start BFS from a specific player |
-| `--max-players N` | Stop after N players (useful for testing) |
-| `--patch-window N` | Only store games from the N most recent patches (default: 5). Patch list fetched automatically from Data Dragon. |
-| `--verbose` / `-v` | Print each player name, rank, and match as they are fetched |
 
 ---
 
@@ -95,11 +131,11 @@ karthus-wpa/
 ├── db.py               # SQLite schema + query helpers (WAL mode)
 ├── riot_client.py      # Async Riot API client (aiohttp, semaphore-based rate limiting)
 ├── collector.py        # BFS data collection pipeline
-├── main.py             # Rich CLI entry point
-├── features.py         # (planned) Feature extraction from timeline frames
-├── model.py            # (planned) PyTorch WinProbNet (feedforward v1 + LSTM v2)
-├── wpa.py              # (planned) WPA calculator
-└── analyzer.py         # (planned) Per-player aggregate WPA analysis
+├── features.py         # Feature extraction from timeline frames (384-dim vectors)
+├── model.py            # PyTorch WinProbNet (feedforward) + training loop
+├── wpa.py              # WPA calculator
+├── analyzer.py         # Per-player WPA analysis + item tier list (Rich output)
+└── main.py             # Rich CLI entry point
 ```
 
 ---
@@ -107,11 +143,13 @@ karthus-wpa/
 ## Roadmap
 
 - [x] Async data collection pipeline (BFS crawl, timeline storage)
-- [ ] Feature extraction (`features.py`)
-- [ ] Win probability model training (`model.py`)
-- [ ] WPA calculator (`wpa.py`)
-- [ ] Per-player WPA breakdown CLI (`analyzer.py`)
-- [ ] Item WPA tierlist
+- [x] Feature extraction (`features.py`)
+- [x] Win probability model training (`model.py`)
+- [x] WPA calculator (`wpa.py`)
+- [x] Per-player WPA breakdown CLI (`analyzer.py`)
+- [x] Item WPA tierlist
+- [ ] Challenger benchmark comparison column in analyze output
+- [ ] LSTM sequence model (v2) for better temporal modeling
 
 ---
 

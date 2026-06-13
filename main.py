@@ -23,6 +23,7 @@ from rich.table import Table, box
 
 import db
 from collector import run_collection
+from analyzer import print_player_analysis, print_item_tierlist
 
 load_dotenv()
 console = Console()
@@ -204,6 +205,47 @@ def cmd_games(args: argparse.Namespace) -> None:
     console.print(t)
 
 
+def cmd_train(args: argparse.Namespace) -> None:
+    """Train a win probability model for a role."""
+    import model as mdl
+    from collector import _fetch_valid_patches
+    import aiohttp, asyncio
+
+    role = (args.role or "").upper()
+    if not role:
+        console.print("[red]--role is required. Example: python main.py train --role MID[/red]")
+        return
+
+    patches: set | None = None
+    if args.patch_window:
+        async def _get_patches():
+            async with aiohttp.ClientSession() as s:
+                return await _fetch_valid_patches(s, args.patch_window)
+        patches = asyncio.run(_get_patches())
+        if patches:
+            console.print(f"[dim]Patch window ({args.patch_window}): {', '.join(sorted(patches, reverse=True))}[/dim]")
+
+    mdl.train_model(role, patches=patches)
+
+
+def cmd_analyze(args: argparse.Namespace) -> None:
+    """Print WPA breakdown for a player."""
+    name  = args.name
+    role  = (args.role or "").upper() or None
+    games = args.games or 20
+    print_player_analysis(name, role=role, n_games=games)
+
+
+def cmd_tierlist(args: argparse.Namespace) -> None:
+    """Print item WPA tier list for a role."""
+    role = (args.role or "").upper()
+    if not role:
+        console.print("[red]--role is required. Example: python main.py tierlist --role MID[/red]")
+        return
+    rank = args.purchase_rank or 1
+    print_item_tierlist(role, purchase_rank=rank)
+
+
 def cmd_reset(_args: argparse.Namespace) -> None:
     """Wipe the database — deletes all collected data and recreates empty schema."""
     console.print(
@@ -251,6 +293,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_games = sub.add_parser("games", help="Show stored Karthus games for a player")
     p_games.add_argument("name", metavar="NAME#TAG", help="Player Riot ID")
 
+    # train
+    p_train = sub.add_parser("train", help="Train a win probability model for a role")
+    p_train.add_argument("--role",         metavar="ROLE",  required=True, help="Role to train (MID, JUNGLE, BOTTOM, SUPPORT, TOP)")
+    p_train.add_argument("--patch-window", metavar="N",     type=int,      help="Restrict training to N most recent patches")
+
+    # analyze
+    p_analyze = sub.add_parser("analyze", help="Show WPA breakdown for a player")
+    p_analyze.add_argument("name",          metavar="NAME#TAG",  help="Player Riot ID")
+    p_analyze.add_argument("--role",        metavar="ROLE",      help="Filter to a specific role")
+    p_analyze.add_argument("--games",       metavar="N",         type=int, default=20, help="Number of recent games to analyze (default: 20)")
+
+    # tierlist
+    p_tier = sub.add_parser("tierlist", help="Show item WPA tier list for a role")
+    p_tier.add_argument("--role",          metavar="ROLE",  required=True, help="Role (MID, JUNGLE, BOTTOM, SUPPORT, TOP)")
+    p_tier.add_argument("--purchase-rank", metavar="N",     type=int, default=1, help="1 = first item, 2 = second item, etc. (default: 1)")
+
     # reset
     sub.add_parser("reset", help="Wipe the database and start fresh (asks for confirmation)")
 
@@ -271,18 +329,27 @@ def main() -> None:
         cmd_players(args)
     elif args.command == "games":
         cmd_games(args)
+    elif args.command == "train":
+        cmd_train(args)
+    elif args.command == "analyze":
+        cmd_analyze(args)
+    elif args.command == "tierlist":
+        cmd_tierlist(args)
     elif args.command == "reset":
         cmd_reset(args)
     else:
         # No subcommand: show help + quick stats
         console.print(Panel(
             "[bold cyan]Karthus WPA[/bold cyan]\n\n"
-            "  [green]collect[/green]              Collect games from Riot API\n"
-            "  [green]collect --seed NAME#TAG[/green]  BFS from one player\n"
-            "  [green]stats[/green]                Database overview\n"
-            "  [green]players[/green]              List collected players\n"
-            "  [green]games NAME#TAG[/green]        Show games for a player\n"
-            "  [green]reset[/green]                Wipe database and start fresh\n\n"
+            "  [green]collect[/green]                    Collect games from Riot API\n"
+            "  [green]collect --seed NAME#TAG[/green]    BFS from one player\n"
+            "  [green]stats[/green]                      Database overview\n"
+            "  [green]players[/green]                    List collected players\n"
+            "  [green]games NAME#TAG[/green]              Show games for a player\n"
+            "  [green]train --role ROLE[/green]           Train win probability model\n"
+            "  [green]analyze NAME#TAG[/green]            WPA breakdown for a player\n"
+            "  [green]tierlist --role ROLE[/green]        Item WPA tier list\n"
+            "  [green]reset[/green]                      Wipe database and start fresh\n\n"
             "Run [bold]python main.py --help[/bold] for full usage.",
             title="[bold]Karthus WPA[/bold]",
             border_style="cyan",
