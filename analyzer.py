@@ -22,16 +22,17 @@ import wpa as _wpa
 
 console = Console()
 
-# ── Item name cache (fetched from Data Dragon on first use) ──────────────────
+# ── Item cache (fetched from Data Dragon on first use) ───────────────────────
 
-_item_names: dict[int, str] = {}
-_item_names_loaded           = False
-_rune_names: dict[int, str] = {}
-_rune_names_loaded           = False
+_item_names: dict[int, str]  = {}
+_item_data:  dict[int, dict] = {}   # full item data for filtering
+_item_names_loaded            = False
+_rune_names: dict[int, str]  = {}
+_rune_names_loaded            = False
 
 
 def _get_item_names() -> dict[int, str]:
-    global _item_names, _item_names_loaded
+    global _item_names, _item_data, _item_names_loaded
     if _item_names_loaded:
         return _item_names
     _item_names_loaded = True
@@ -44,10 +45,54 @@ def _get_item_names() -> dict[int, str]:
         url = f"https://ddragon.leagueoflegends.com/cdn/{version}/data/en_US/item.json"
         with urllib.request.urlopen(url, timeout=10) as r:
             data = json.loads(r.read())
-        _item_names = {int(k): v["name"] for k, v in data["data"].items()}
+        raw         = data["data"]
+        _item_data  = {int(k): v for k, v in raw.items()}
+        _item_names = {int(k): v["name"] for k, v in raw.items()}
     except Exception:
         pass
     return _item_names
+
+
+def _is_valid_tierlist_item(item_id: int) -> bool:
+    """
+    Return True only for starter items and completed legendary items.
+
+    Starters  : no component ingredients, cost ≤ 1 000 g (Doran's, Dark Seal, Cull …)
+    Legendaries: built from components, doesn't upgrade into another purchasable
+                 item, total cost ≥ 2 500 g
+    Excluded  : trinkets, consumables, boots, component/intermediate items,
+                wards, anything not sold in the shop.
+    """
+    d = _item_data.get(item_id)
+    if d is None:
+        return True  # unknown item: include rather than silently drop
+
+    tags = d.get("tags", [])
+    gold = d.get("gold", {})
+
+    if not gold.get("purchasable", False) or not d.get("inStore", True):
+        return False
+    if "Trinket" in tags or d.get("consumed") or "Boots" in tags:
+        return False
+
+    has_components = bool(d.get("from", []))
+    total_cost     = gold.get("total", 0)
+
+    # Starter: no recipe, low cost
+    if not has_components and 0 < total_cost <= 1000:
+        return True
+
+    # Legendary: built from components, doesn't build into another
+    # *purchasable* item (ignores un-purchasable Ornn upgrade entries)
+    into           = d.get("into", [])
+    builds_further = any(
+        _item_data.get(int(iid), {}).get("gold", {}).get("purchasable", False)
+        for iid in into
+    )
+    if has_components and not builds_further and total_cost >= 2500:
+        return True
+
+    return False
 
 
 def _get_rune_names() -> dict[int, str]:
@@ -203,6 +248,9 @@ def print_item_tierlist(
                 if explicit:
                     console.print(f"[red]{e}[/red]")
                 continue
+
+            # Keep only starters and completed legendaries
+            items = [it for it in items if _is_valid_tierlist_item(it["item_id"])]
 
             if not items:
                 if explicit:
